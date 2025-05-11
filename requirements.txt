@@ -1,0 +1,15 @@
+blinker==1.9.0
+certifi==2025.4.26
+click==8.1.8
+elastic-transport==8.17.1
+elasticsearch==8.12.1
+Flask==2.3.3
+itsdangerous==2.2.0
+Jinja2==3.1.6
+joblib==1.5.0
+MarkupSafe==3.0.2
+nltk==3.8.1
+regex==2024.11.6
+tqdm==4.67.1
+urllib3==2.4.0
+Werkzeug==3.1.3
