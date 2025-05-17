@@ -33,164 +33,122 @@ def remove_stopwords(text):
 
 
 def build_query(query_texts, query_texts_no_stop):
+    def span_near_clause(terms):
+        return {
+            "span_near": {
+                "clauses": [
+                    {
+                        "span_multi": {
+                            "match": {
+                                "fuzzy": {
+                                    "document_text": {
+                                        "value": term,
+                                        "fuzziness": "AUTO:4,7"
+                                    }
+                                }
+                            }
+                        }
+                    } for term in terms
+                ],
+                "slop": 5,
+                "in_order": False
+            }
+        }
+
     functions = [
         {
-          "gauss": {
-            "document_date": {
-              "origin": "now",
-              "scale": "300d",
-              "decay": 0.99
+            "gauss": {
+                "document_date": {
+                    "origin": "now",
+                    "scale": "300d",
+                    "decay": 0.99
+                }
             }
-          }
         }
     ]
+
     for idx in range(len(query_texts)):
-        functions.extend(
-            [
-        {
-          "filter": {
-            "match_phrase": {
-              "document_text": {
-                "query": query_texts[idx],
-                "slop": 5
-              }
-            }
-          },
-          "weight": 1000
-        },
-        {
-          "filter": {
-            "match_phrase": {
-              "document_text": {
-                "query": query_texts_no_stop[idx],
-                "slop": 5
-              }
-            }
-          },
-          "weight": 500
-        },
-        {
-          "filter": {
-            "match": {
-              "document_text": {
-                "query": query_texts_no_stop[idx],
-              }
-            }
-          },
-          "weight": 100
-        },
-        {
-          "filter": {
-            "match": {
-              "document_text": {
-                "query": query_texts_no_stop[idx],
-                "operator": "AND",
-                "fuzziness": "AUTO"
-              }
-            }
-          },
-          "weight": 2
-        },
-      ]
-        )
-    return {
-  "query": {
-    "function_score": {
-      "query": {
-        "bool": {
-          "should": [
+        tokens = query_texts_no_stop[idx].split()
+        functions.extend([
             {
-              "bool": {
-                "filter": [
-                  {
-                    "match": {
-                      "document_text": {
-                        "query": query_text_no_stop,
-                        "operator": "AND",
-                        "fuzziness": "AUTO:4,7",
-                      }
-                    }
-                  }
-                  for query_text_no_stop in query_texts_no_stop
-                ]
-              }
-            } 
-          ],
-          "minimum_should_match": 1
-        }
-      },
-      "functions": functions,
-      "score_mode": "multiply",
-      "boost_mode": "replace"
-    }
-  },
-    "suggest": {
-    "text": query_texts[-1],
-    "spellcheck": {
-        "term": {
-            "field": "document_text",
-            "suggest_mode": "always"
-        }
-    }
-    },
-  "highlight": {
-    "fields": {
-      "document_text": {
-        "fragment_size": 70,
-        "number_of_fragments": 15,
-        "type": "unified",
-        "matched_fields": [
-          "document_text"
-        ],
-        "highlight_query": {
-            "bool": {
-                "should": [
-                {
+                "filter": {
                     "match_phrase": {
-                    "document_text": {
-                        "query": query_texts[-1],
-                        "slop": 5,
-                        "boost": 4
-                    }
-                    }
-                },
-                {
-                    "match_phrase": {
-                    "document_text": {
-                        "query": query_texts_no_stop[-1],
-                        "slop": 5,
-                        "boost": 2
-                    }
+                        "document_text": {
+                            "query": query_texts[idx],
+                            "slop": 5
+                        }
                     }
                 },
-                {
-                    "match": {
-                    "document_text": {
-                        "query": query_texts_no_stop[-1],
-                        "boost": 2
-                    }
+                "weight": 1000
+            },
+            {
+                "filter": span_near_clause(tokens),
+                "weight": 10
+            }
+        ])
+
+    return {
+        "query": {
+            "function_score": {
+                "query": {
+                    "bool": {
+                        "should": [
+                            {
+                                "bool": {
+                                    "filter": [
+                                        span_near_clause(q.split()) for q in query_texts_no_stop
+                                    ]
+                                }
+                            }
+                        ],
+                        "minimum_should_match": 1
                     }
                 },
-                {
-                    "match": {
-                    "document_text": {
-                        "query": query_texts_no_stop[-1],
-                        "operator": "AND",
-                        "fuzziness": "AUTO:4,7",
-                        "boost": 1
-                    }
+                "functions": functions,
+                "score_mode": "multiply",
+                "boost_mode": "replace"
+            }
+        },
+        "suggest": {
+            "text": query_texts[-1],
+            "spellcheck": {
+                "term": {
+                    "field": "document_text",
+                    "suggest_mode": "always"
+                }
+            }
+        },
+        "highlight": {
+            "fields": {
+                "document_text": {
+                    "fragment_size": 70,
+                    "number_of_fragments": 15,
+                    "type": "unified",
+                    "matched_fields": ["document_text"],
+                    "highlight_query": {
+                        "bool": {
+                            "should": [
+                                {
+                                    "match_phrase": {
+                                        "document_text": {
+                                            "query": query_texts[-1],
+                                            "slop": 5,
+                                            "boost": 4
+                                        }
+                                    }
+                                },
+                                span_near_clause(query_texts_no_stop[-1].split())
+                            ]
+                        }
                     }
                 }
-                ]
-            }
-            }
-      }
-    },
-    "fragmenter": "score_ordered",
-    "require_field_match": True
-  },
-  "size": 50
-}
+            },
+            "fragmenter": "score_ordered",
+            "require_field_match": True
+        },
+        "size": 50
+    }
+
 
 def get_corrected_query(response, query):
     suggestions = response.get("suggest", {}).get("spellcheck", [])
@@ -324,4 +282,4 @@ TEMPLATE = """
 """
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=os.environ.get("PORT") or 5000, debug=True)
+    app.run(host='0.0.0.0', port=os.environ.get("PORT") or 5001, debug=True)
