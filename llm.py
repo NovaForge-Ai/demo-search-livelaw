@@ -1,3 +1,4 @@
+from logging import getLogger
 import openai
 import ast
 from typing import List, Tuple, Union
@@ -70,16 +71,17 @@ Only reply just the fixed list of tuple[str, int] in the format like [('text_1',
 
         fix_prompt = """Only reply just the fixed list of tuple[str, int] in the format like [('text_1', 1), ('text_2', 2)]"""
 
+        l = getLogger()
         for attempt in range(self.max_retries):
             response_text = self._query_chatgpt(system_prompt, f"provide result for: '{user_query}'")
             parsed_array = self._try_parse_tuple_array(response_text)
             if parsed_array is not None:
                 return parsed_array
             else:
-                print(f"[Attempt {attempt+1}] Invalid tuple array format. Retrying with fix prompt.")
+                l.info(f"[Attempt {attempt+1}] Invalid tuple array format. Retrying with fix prompt.")
                 user_query = f"Fix this output:\n{response_text}"
                 system_prompt = fix_prompt
-        print("Max retries reached. Failed to get valid tuple array.")
+        l.info("Max retries reached. Failed to get valid tuple array.")
         return None
 
     def _query_chatgpt(self, system_prompt: str, user_query: str) -> str:
@@ -102,32 +104,35 @@ Only reply just the fixed list of tuple[str, int] in the format like [('text_1',
         total_tokens = usage.total_tokens if usage else "?"
 
         # Debug output
-        print(f"user query: {user_query}")
-        print(f"input token consumption: {prompt_tokens}")
-        print(f"output token consumption: {completion_tokens}")
-        print(f"total token consumption: {total_tokens}")
-        print("-------LLM Response Start-------")
-        print(content)
-        print("-------LLM Response End-------")
+        l = getLogger()
+        l.info(f"user query: {user_query}")
+        l.info(f"input token consumption: {prompt_tokens}")
+        l.info(f"output token consumption: {completion_tokens}")
+        l.info(f"total token consumption: {total_tokens}")
+        l.info("-------LLM Response Start-------")
+        l.info(content)
+        l.info("-------LLM Response End-------")
 
         return content
 
     def _try_parse_tuple_array(self, output: str) -> Union[List[Tuple], None]:
         """Try to parse the output as a list of tuples using ast.literal_eval."""
+        l = getLogger()
         try:
             output = output.replace("\n", "")
             parsed = ast.literal_eval(output)
             if isinstance(parsed, list) and all(isinstance(item, tuple) and isinstance(item[0], str) and isinstance(item[1], int) for item in parsed):
                 return parsed
             else:
-                print("Parsed result is not a list of tuples.")
+                l.info("Parsed result is not a list of tuples.")
                 return None
         except Exception as e:
-            print(f"Failed to parse output as Python list of tuples: {e}")
+            l.info(f"Failed to parse output as Python list of tuples: {e}")
             return None
         
     def _try_parse_search_highlight_json(self, output: str) -> SearchHighlightResponse | None:
         """Try to parse json as SearchHighlightResponse"""
+        l = getLogger()
         try:
             parsed = ast.literal_eval(output)
             if (
@@ -141,10 +146,10 @@ Only reply just the fixed list of tuple[str, int] in the format like [('text_1',
             ):
                 return SearchHighlightResponse(parsed["search"], parsed["highlight"])
             else:
-                print("Parsed result is not a SearchHighlightResponse.")
+                l.info("Parsed result is not a SearchHighlightResponse.")
                 return None
         except Exception as e:
-            print(f"Failed to parse output as SearchHighlightResponse: {e}")
+            l.info(f"Failed to parse output as SearchHighlightResponse: {e}")
             return None
         
     def fetch_search_highlight(
@@ -261,14 +266,15 @@ Ensure:
 Return only the fixed dictionary.
 """
 
+        l = getLogger()
         for attempt in range(self.max_retries):
             response_text = self._query_chatgpt(system_prompt, f"provide result for: '{user_query}'")
             parsed_search_highlight = self._try_parse_search_highlight_json(response_text)
             if parsed_search_highlight is not None:
                 return parsed_search_highlight
             else:
-                print(f"[Attempt {attempt+1}] Invalid SearchHighlight format. \n{response_text}\n Retrying with fix prompt.")
+                l.info(f"[Attempt {attempt+1}] Invalid SearchHighlight format. \n{response_text}\n Retrying with fix prompt.")
                 user_query = f"Fix this output:\n{response_text}"
                 system_prompt = fix_prompt
-        print("Max retries reached. Failed to get valid SearchHighlight.")
+        l.info("Max retries reached. Failed to get valid SearchHighlight.")
         return None
