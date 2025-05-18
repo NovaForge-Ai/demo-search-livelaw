@@ -140,7 +140,7 @@ def build_query(queries: list[list[list[Term]]], highlights: list[Term], plain_q
                     "match_phrase": {
                         "document_text": {
                         "query": phrase.text,
-                        "slop": 5,
+                        "slop": 20,
                         "boost": 10
                         }
                     }
@@ -149,7 +149,7 @@ def build_query(queries: list[list[list[Term]]], highlights: list[Term], plain_q
                     "match_phrase": {
                         "document_text": {
                         "query": phrase.no_stop,
-                        "slop": 5,
+                        "slop": 20,
                         "boost": 5
                         }
                     }
@@ -165,7 +165,7 @@ def build_query(queries: list[list[list[Term]]], highlights: list[Term], plain_q
                     "match_phrase": {
                         "document_text": {
                             "query": highlight.no_stop,
-                            "slop": 5,
+                            "slop": 20,
                             "boost": 1
                             }
                         }
@@ -183,7 +183,7 @@ def build_query(queries: list[list[list[Term]]], highlights: list[Term], plain_q
                             "match_phrase": {
                             "document_text": {
                                 "query": phrase.no_stop,
-                                "slop": 5
+                                "slop": 20
                             }
                             }
                         } for phrase in phrases

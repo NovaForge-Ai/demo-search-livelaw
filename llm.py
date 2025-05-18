@@ -187,7 +187,7 @@ Example input query: "heydons law"
 Example output:
 {
     "search": [
-        ["Heydon's Law", "mischief rule"]
+        ["Heydon's Law", "Heydon's Rule", "mischief rule"]
     ],
     "highlight": [
         "purposive interpretation",
@@ -200,7 +200,7 @@ Example input query: "murder"
 Example output:
 {
     "search": [
-        ["murder", "murders", "homicide", "homicides", "manslaughter", "manslaughters"]
+        ["murder", "murders", "homicide", "homicides", "manslaughter", "manslaughters","killed"]
     ],
     "highlight": [
         "first degree murder",
@@ -209,8 +209,40 @@ Example output:
         "involuntary manslaughter"
     ]
 }
+
+Example input query: "defence witness to be treated on par with prosecution witness"
+
+Example output:
+{
+    "search": [
+        ["defence witness treated on par prosecution witness", "defence witness equitable treatment prosecution witness", "defence witness equal treatment prosecution witness"],
+    ],
+    "highlight": [
+        "witness credibility",
+        "witness impartiality",
+        "rights of defense witness",
+        "rights of prosecution witness"
+    ]
+}
+
 Only return the Python dictionary in this format. Do not add explanations or extra text.
 """
+
+        """Example input query: "section 17 from registration act"
+
+Example output:
+{
+    "search": [
+        ["Section 71",  "S. 71"],
+        ["Registration Act"]
+    ],
+    "highlight": [
+        "rectification of errors under Section 71",
+        "powers under Section 71",
+        "Registration Act Section 71"
+    ]
+}
+        """
 
         fix_prompt = """
 Please fix the format of the output to be a valid Python dictionary with this structure:
