@@ -2,7 +2,9 @@
 import base64
 from functools import wraps
 import json
+import logging
 import os
+from logging import getLogger
 from typing import List, Tuple
 from flask import Flask, request, render_template_string, g, Response
 from elasticsearch import Elasticsearch
@@ -14,6 +16,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from llm import ChatGPTTupleArrayFetcher, SearchHighlightResponse
+
+def setup_logging():
+    # Configure root logger
+    logging.basicConfig(
+        level=logging.INFO,
+        format='[%(asctime)s] %(levelname)s in %(name)s: %(message)s',
+        handlers=[logging.StreamHandler()]  # Output to stdout
+    )
+
+setup_logging()
 
 app = Flask(__name__)
 
@@ -131,31 +143,30 @@ def build_query(queries: list[list[list[Term]]], highlights: list[Term], plain_q
     ]
     
     highlight_functions = []
-    for query in queries:
-        for phrases in query:
-            for phrase in phrases:
-                highlight_functions.extend(
-                    [
-                        {
-                    "match_phrase": {
-                        "document_text": {
-                        "query": phrase.text,
-                        "slop": 20,
-                        "boost": 10
-                        }
-                    }
-                    },
+    for phrases in queries[-1]:
+        for phrase in phrases:
+            highlight_functions.extend(
+                [
                     {
-                    "match_phrase": {
-                        "document_text": {
-                        "query": phrase.no_stop,
-                        "slop": 20,
-                        "boost": 5
-                        }
+                "match_phrase": {
+                    "document_text": {
+                    "query": phrase.text,
+                    "slop": 20,
+                    "boost": 10
                     }
+                }
+                },
+                {
+                "match_phrase": {
+                    "document_text": {
+                    "query": phrase.no_stop,
+                    "slop": 20,
+                    "boost": 5
                     }
-                    ]
-                )
+                }
+                }
+                ]
+            )
     for highlight in highlights:
         if not highlight.no_stop:
             continue
@@ -283,12 +294,12 @@ def search():
     es = get_es()
     llm = get_llm()
     corrected_query = ""
-    previous_queries_encoded = request.values.get("previous_queries_encoded", "[]")
+    previous_queries_encoded = request.values.get("previous_queries_encoded", encode_queries([]))
     query_text = request.values.get("new_query_text", "")
     display_query_text = ""
     if request.method == "POST":
         query_text = request.form["new_query_text"]
-        previous_queries_encoded = request.form.get("queries", encode_queries([]))
+        previous_queries_encoded = request.form.get("previous_queries_encoded", encode_queries([]))
     if query_text:
         queries = decode_queries(previous_queries_encoded)
         res = llm.fetch_search_highlight(query_text)
@@ -296,6 +307,7 @@ def search():
             res = SearchHighlightResponse([[query_text]], [query_text])
         res_with_no_stop = SearchHighlightResponseWithNoStop.from_search_highlight_response(res)
         queries.append((query_text, res_with_no_stop))
+        getLogger().info(f"search keywords: {[q for q, _ in queries]}")
         es_query = build_query([query.search for _, query in queries], res_with_no_stop.highlight, query_text)
         response = es.search(index="doc_zeta", body=es_query)
         corrected_query = get_corrected_query(response, query_text)
@@ -331,7 +343,7 @@ TEMPLATE = """
   <h2>Search Elasticsearch</h2>
   <form method="post">
     <input type="text" name="new_query_text" placeholder="Enter search text" value="{{ new_query_text }}">
-    <input type="hidden" name="previous_query" value="{{ previous_queries_encoded }}">
+    <input type="hidden" name="previous_queries_encoded" value="{{ previous_queries_encoded }}">
     <input type="submit" value="Search">
   </form>
     {% if display_query_text %}
@@ -377,4 +389,5 @@ TEMPLATE = """
 """
 
 if __name__ == "__main__":
+    getLogger().info("Starting App")
     app.run(host='0.0.0.0', port=os.environ.get("PORT") or 5001, debug=True)
