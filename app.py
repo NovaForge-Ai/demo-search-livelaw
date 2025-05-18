@@ -1,6 +1,10 @@
 
+import base64
+from functools import wraps
+import json
 import os
-from flask import Flask, request, render_template_string, g
+from typing import List, Tuple
+from flask import Flask, request, render_template_string, g, Response
 from elasticsearch import Elasticsearch
 import nltk
 nltk.download('stopwords')
@@ -9,7 +13,7 @@ from nltk.corpus import stopwords
 from dotenv import load_dotenv
 load_dotenv()
 
-from llm import ChatGPTTupleArrayFetcher
+from llm import ChatGPTTupleArrayFetcher, SearchHighlightResponse
 
 app = Flask(__name__)
 
@@ -18,6 +22,27 @@ USERNAME = os.environ.get('ELASTIC_USERNAME')
 PASSWORD = os.environ.get('ELASTIC_PASSWORD')
 JUDGMENT_PAGE_URL = "https://thejudgements.in/searchResult?url="
 
+def check_auth(username, password):
+    return (
+        username == os.environ.get("APP_USERNAME") and
+        password == os.environ.get("APP_PASSWORD")
+    )
+
+def authenticate():
+    return Response(
+        "Could not verify your access level.\n"
+        "You have to login with proper credentials", 401,
+        {"WWW-Authenticate": 'Basic realm="Login Required"'}
+    )
+
+def requires_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or not check_auth(auth.username, auth.password):
+            return authenticate()
+        return f(*args, **kwargs)
+    return decorated
 
 def get_es():
     if 'es' not in g:
@@ -35,18 +60,64 @@ STOPWORDS = set(stopwords.words('english'))
 def remove_stopwords(text):
     return ' '.join(word for word in text.split() if word.lower() not in STOPWORDS)
 
-class Query:
+class Term:
     text: str
     no_stop: str
-    priority: int
 
-    def __init__(self, text, no_stop, priority):
+    def __init__(self, text):
         self.text = text
-        self.no_stop = no_stop
-        self.priority = priority
+        self.no_stop = remove_stopwords(text)
+    
+    def to_dict(self) -> dict[str, str]:
+        return {"text": self.text, "no_stop": self.no_stop}
+
+    @staticmethod
+    def from_dict(data: dict[str, str]):
+        term = Term(data["text"])
+        term.no_stop = data["no_stop"]  # Skip recomputing
+        return term
+
+class SearchHighlightResponseWithNoStop:
+    search: list[list[Term]]
+    highlight: list[Term]
+
+    def __init__(self, search: list[list[Term]], highlight: list[Term]):
+        self.search = search
+        self.highlight = highlight
+
+    @staticmethod
+    def from_search_highlight_response(resp: SearchHighlightResponse):
+        search = [[Term(text) for text in group] for group in resp.search]
+        highlight = [Term(text) for text in resp.highlight]
+        return SearchHighlightResponseWithNoStop(search=search, highlight=highlight)
 
 
-def build_query(queries: list[Query], highlights: list[Query]):
+    def to_dict(self):
+        return {
+            "search": [[term.to_dict() for term in group] for group in self.search],
+            "highlight": [term.to_dict() for term in self.highlight],
+        }
+
+    @staticmethod
+    def from_dict(data: dict):
+        search = [[Term.from_dict(term) for term in group] for group in data["search"]]
+        highlight = [Term.from_dict(term) for term in data["highlight"]]
+        return SearchHighlightResponseWithNoStop(search=search, highlight=highlight)
+
+def encode_queries(queries: List[Tuple[str, SearchHighlightResponseWithNoStop]]) -> str:
+    """Encodes a list of search highlight responses with no stop to a URL-safe string"""
+    serializable = [(query, resp.to_dict()) for query, resp in queries]
+    json_str = json.dumps({"resp": serializable}, separators=(",", ":"))
+    return base64.urlsafe_b64encode(json_str.encode()).decode()
+
+def decode_queries(encoded_str: str) -> List[Tuple[str, SearchHighlightResponseWithNoStop]]:
+    """Decodes the URL-safe string back to a list of search highlight responses with no stop"""
+    json_str = base64.urlsafe_b64decode(encoded_str.encode()).decode()
+    data = json.loads(json_str)
+    return [(query, SearchHighlightResponseWithNoStop.from_dict(resp)) for query, resp in data["resp"]]
+
+
+def build_query(queries: list[list[list[Term]]], highlights: list[Term], plain_query: str):
     functions = [
         {
           "gauss": {
@@ -58,50 +129,33 @@ def build_query(queries: list[Query], highlights: list[Query]):
           }
         }
     ]
-    for query in queries:
-        if not query.text:
-            continue
-        functions.append({
-          "filter": {
-            "match_phrase": {
-              "document_text": {
-                "query": query.text,
-                "slop": 5
-              }
-            }
-          },
-          "weight": 1000
-        })
-    for query in queries:
-        if not query.no_stop:
-            continue
-        functions.extend(
-            [
-        {
-          "filter": {
-            "match_phrase": {
-              "document_text": {
-                "query": query.no_stop,
-                "slop": 5
-              }
-            }
-          },
-          "weight": 500
-        },
-        {
-          "filter": {
-            "match": {
-              "document_text": {
-                "query": query.no_stop,
-              }
-            }
-          },
-          "weight": 10
-        },
-      ]
-        )
     
     highlight_functions = []
+    for query in queries:
+        for phrases in query:
+            for phrase in phrases:
+                highlight_functions.extend(
+                    [
+                        {
+                    "match_phrase": {
+                        "document_text": {
+                        "query": phrase.text,
+                        "slop": 5,
+                        "boost": 10
+                        }
+                    }
+                    },
+                    {
+                    "match_phrase": {
+                        "document_text": {
+                        "query": phrase.no_stop,
+                        "slop": 5,
+                        "boost": 5
+                        }
+                    }
+                    }
+                    ]
+                )
     for highlight in highlights:
         if not highlight.no_stop:
             continue
@@ -112,36 +166,38 @@ def build_query(queries: list[Query], highlights: list[Query]):
                         "document_text": {
                             "query": highlight.no_stop,
                             "slop": 5,
-                            "boost": 5-highlight.priority
+                            "boost": 1
                             }
                         }
                 }
             ]
         )
-
+    filter = []
+    for query in queries:
+        for phrases in query:
+            filter.append(
+                    {
+                    "bool": {
+                        "should": [
+                        {
+                            "match_phrase": {
+                            "document_text": {
+                                "query": phrase.no_stop,
+                                "slop": 5
+                            }
+                            }
+                        } for phrase in phrases
+                        ],
+                        "minimum_should_match": 1
+                    }
+                    }
+            )
     return {
   "query": {
     "function_score": {
       "query": {
         "bool": {
-          "should": [
-            {
-              "bool": {
-                "filter": [
-                  {
-                    "match": {
-                      "document_text": {
-                        "query": query.no_stop,
-                        "operator": "AND",
-                      }
-                    }
-                  }
-                  for query in queries if query.no_stop
-                ]
-              }
-            } 
-          ],
-          "minimum_should_match": 1
+          "must": filter
         }
       },
       "functions": functions,
@@ -150,7 +206,7 @@ def build_query(queries: list[Query], highlights: list[Query]):
     }
   },
     "suggest": {
-    "text": queries[-1].text,
+    "text": plain_query,
     "spellcheck": {
         "term": {
             "field": "document_text",
@@ -220,76 +276,29 @@ def get_llm():
         g.llm = ChatGPTTupleArrayFetcher()
     return g.llm
 
-def get_queries(query_text: str, generated_previous_query: str, llm: ChatGPTTupleArrayFetcher) -> tuple[list[Query], list[Query]]:
-    queries = []
-    highlights = []
-    generation_prompt = """
-We have a search system that takes a query from a lawyer. They are looking for relevant cases. But we are doing keyword search. Our search accepts multiple phrases which are searched based on match_phrase with slop. 
-
-We want to split it into phrases that appear in the judgements and have legal meaning. 
-
-Include relevant sections of case laws as well. Can you give the list of these phrases in an array with its priority
-
-Priority 1 should only contain terms inside the query
-
-Priority 2 and 3 can have the different legal terms associated including acts and sections
-Priority 2 and 3 can have words which are verbs or plurals like for terminating it can be terminated and terminates
-
-for example: "denial of sanction after taking cognizance"
-
-answer will be something like:
-
- [
-  ("denial of sanction", 1),
-  ("denials of sanctions", 2),
-  ("taking cognizance", 1),
-  ("sanction for prosecution", 2),
-  ("cognizance without sanction", 2)
-  ("cognizance of offence", 2),
-  ("refusal to grant sanction", 2),
-  ("absence of sanction", 2),
-  ("invalid sanction", 3),
-  ("requirement of sanction", 3),
-  ("sanction under Section CrPC", 2),
-  ("sanction under  Act", 2),
-  ("bar  taking cognizance", 3)
-]
-
-Here we are removing stop words and we are adding slop, so you don't need to repeat words with different phrasing unless the word is not a non stop word or an entirely different way of phrasing it.
-
-Only reply just the fixed list of tuple[str, int] in the format like [('text_1', 1), ('text_2', 2)]
-"""
-    fix_prompt = """Only reply just the fixed list of tuple[str, int] in the format like [('text_1', 1), ('text_2', 2)]"""
-    pred_queries = llm.fetch_array_of_tuples(generation_prompt, query_text, fix_prompt)
-    print(pred_queries)
-    for pred_query, priority in pred_queries:
-        no_stop = remove_stopwords(pred_query)
-        if priority == 1:
-            queries.append(Query(pred_query, no_stop, priority))
-        highlights.append(Query(pred_query, no_stop, priority))
-    for prev_query in [s.strip() for s in generated_previous_query.split(",")]:
-        queries.append(Query(prev_query, remove_stopwords(prev_query), 1))
-    return queries, highlights
-
 @app.route("/", methods=["GET", "POST"])
+@requires_auth
 def search():
     results = []
     es = get_es()
     llm = get_llm()
     corrected_query = ""
-    previous_query = request.values.get("previous_query", "")
-    generated_query = request.values.get("generated_query", "")
-    query_text = request.values.get("query_text", "")
+    previous_queries_encoded = request.values.get("previous_queries_encoded", "[]")
+    query_text = request.values.get("new_query_text", "")
+    display_query_text = ""
     if request.method == "POST":
-        query_text = request.form["query_text"]
-        previous_query = request.form.get("previous_query", "")
-        generated_query = request.form.get("generated_query", "")
+        query_text = request.form["new_query_text"]
+        previous_queries_encoded = request.form.get("queries", encode_queries([]))
     if query_text:
-        print(generated_query, query_text)
-        queries, highlights = get_queries(query_text, generated_query, llm)
-        es_query = build_query(queries, highlights)
+        queries = decode_queries(previous_queries_encoded)
+        res = llm.fetch_search_highlight(query_text)
+        if res is None:
+            res = SearchHighlightResponse([[query_text]], [query_text])
+        res_with_no_stop = SearchHighlightResponseWithNoStop.from_search_highlight_response(res)
+        queries.append((query_text, res_with_no_stop))
+        es_query = build_query([query.search for _, query in queries], res_with_no_stop.highlight, query_text)
         response = es.search(index="doc_zeta", body=es_query)
-        corrected_query = get_corrected_query(response, queries[-1].text)
+        corrected_query = get_corrected_query(response, query_text)
         for hit in response["hits"]["hits"]:
             highlights_res = hit.get("highlight", {})
             snippets = get_snippets(highlights_res)
@@ -301,10 +310,9 @@ def search():
                 "document_url": document_url,
                 "snippets": snippets
             })
-        previous_query = previous_query + ", " +  query_text
-        previous_query = previous_query.strip(", ")
-        generated_query = ", ".join([query.text for query in queries if query.text]) 
-    return render_template_string(TEMPLATE, results=results, query_text="", corrected_query=corrected_query, previous_query=previous_query, genearted_query=generated_query)
+        previous_queries_encoded = encode_queries(queries)
+        display_query_text = ", ".join([text for text, _ in queries])
+    return render_template_string(TEMPLATE, results=results, new_query_text="", corrected_query=corrected_query, previous_queries_encoded=previous_queries_encoded, display_query_text=display_query_text)
 
 TEMPLATE = """
 <!doctype html>
@@ -322,17 +330,16 @@ TEMPLATE = """
 <body>
   <h2>Search Elasticsearch</h2>
   <form method="post">
-    <input type="text" name="query_text" placeholder="Enter search text" value="{{ query_text }}">
-    <input type="hidden" name="previous_query" value="{{ previous_query }}">
-    <input type="hidden" name="generated_query" value="{{ generated_query }}">
+    <input type="text" name="new_query_text" placeholder="Enter search text" value="{{ new_query_text }}">
+    <input type="hidden" name="previous_query" value="{{ previous_queries_encoded }}">
     <input type="submit" value="Search">
   </form>
-    {% if previous_query %}
+    {% if display_query_text %}
     <p>
-    Current Searches: {{previous_query}}
+    Current Searches: {{display_query_text}}
     <p>
     {% endif %}
-    {% if not previous_query %}    <p> <p>
+    {% if not display_query_text %}    <p> <p>
     {% endif %}
   <form method="get" action="/">
     <button type="submit">Reset</button>
