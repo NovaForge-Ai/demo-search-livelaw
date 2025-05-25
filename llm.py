@@ -154,30 +154,190 @@ Only reply just the fixed list of tuple[str, int] in the format like [('text_1',
         
     def fetch_search_highlight(
         self,
-        user_query: str
+        user_query: str,
+        section: dict,
     ) -> Union[SearchHighlightResponse, None]:
         """Main method to fetch SearchHighlight from ChatGPT."""
+        if section:
+            user_query += f" ; {section['title']}"
+            print(user_query)
+#         system_prompt = """
+# You are helping improve a legal document search system that uses keyword-based phrase search with slop. Your objective is to output phrases that are present in judgements to better match the contents of what the user queried for.
+
+# Given a user's legal query, you need to:
+# 1. Extract important phrases that have legal meaning. Rephrase them to include how they might be used in a judgement. expand abbreviations when necesasry.
+# 2.If the query has some text after ";" sign, it is the explanation of the act or section or article mentioned in the userquery. You may use this information as well for rephrasing
+# 3. Group those phrases into a 2D array (list of list of strings). Each sublist represents a group of semantically related phrases that can be searched together. All groupings should have atleast one term directly from the search, you can correct spelling mistakes though only if its very evident. Add plurals and different wording within each group. If the query mentions an act,you can find the section title after the ';' in the query. rephrase that in ways that it might appear in the judgement.
+# 4. Additionally, highlight the most critical phrases (from the user query or closely related) in a separate list. Legal terms associated including acts and sections. You can use the phrases from the explanation given as well.
+
+# Return a **JSON-like Python dictionary** with:
+# - "search": a list of lists of phrases (each phrase is a string).
+# - "highlight": a list of key phrases to visually highlight to the user.
+
+# All entries must be strings. Avoid empty lists.
+
+# Example input query: "denial of sanction after taking cognizance"
+
+# Example output:
+# {
+#   "search": [
+#     ["denial of sanction", "refusal to grant sanction", "denial of sanctions"],
+#     ["taking cognizance", "cognizance of offence", "cognizance without sanction", "bar to taking cognizance"]
+#   ],
+#   "highlight": [
+#     "sanction under Section",
+#     "absence of sanction",
+#     "invalid sanction",
+#     "requirement of sanction"
+#   ]
+# }
+
+# Example input query: "65 of IT Act ; Tampering with computer source documents"
+
+# Example output:
+# {
+#     "search": [
+#         ["Section 65 of IT Act", "Section 65 of Information Technology Act","Section 65 of Income Tax Act", "tampering with computer source documents"],
+#         ["IT Act", "Income Tax Act","Information Technology Act"]
+#     ],
+#     "highlight": [
+#         "Section 65 IT Act",
+#         "tampering with computer source documents",
+#         "computer source code"
+#     ]
+# }
+
+# Example input query: "heydons law"
+
+# Example output:
+# {
+#     "search": [
+#         ["Heydon's case", "Heydon's Rule", "mischief rule"]
+#     ],
+#     "highlight": [
+#         "purposive interpretation",
+#         "statutory interpretation"
+#     ]
+# }
+
+# Example input query: "murder"
+
+# Example output:
+# {
+#     "search": [
+#         ["murder", "murders", "homicide", "homicides", "manslaughter", "manslaughters","killed"]
+#     ],
+#     "highlight": [
+#         "first degree murder",
+#         "second degree murder",
+#         "voluntary manslaughter",
+#         "involuntary manslaughter"
+#     ]
+# }
+# Example input query: "supreme court on adoption laws"
+
+# Example output:
+# {
+#     "search": [
+#         ["adoption laws", "adoption statutes", "adoption regulations","child adoption laws", "laws on adopting a child"],
+#         ["child adoption"],
+#         ["supreme court", "sc", ]
+#     ],
+#     "highlight": [
+#         "legal requirements for adoption",
+#         "adoption eligibility",
+#         "adoption process"
+#     ]
+# }
+
+# Example input query: "defence witness to be treated on par with prosecution witness"
+
+# Example output:
+# {
+#     "search": [
+#         ["defence witness treated on par prosecution witness", "defence witness equitable treatment prosecution witness", "defence witness equal treatment prosecution witness","treatment of witness"],
+#     ],
+#     "highlight": [
+#         "witness credibility",
+#         "witness impartiality",
+#         "rights of defense witness",
+#         "rights of prosecution witness"
+#     ]
+# }
+# Example input query: "victim was decapitated"
+
+# Example output:
+# "search": [
+#         ["victim was decapitated", "victim decapitation", "decapitated victim","neck was cut off","head cut"]
+#     ],
+#     "highlight": [
+#         "homicide by decapitation",
+#         "murder by decapitation",
+#         "aggravated murder",
+#         "felony murder"
+#     ]
+# }
+
+# Only return the Python dictionary in this format. Do not add explanations or extra text.
+# """
+
+#         """Example input query: "section 17 of the registration act"
+
+# Example output:
+# {
+#     "search": [
+#         [ "Section 71 Registration Act", "s. 71 Registration Act","Reasons for refusal to register","recorded refusal to register"]
+#     ],
+#     "highlight": [
+#         "rectification of errors under Section 71",
+#         "powers under Section 71",
+#         "Registration Act Section 71"
+#     ]
+# }
+#         """
         system_prompt = """
-You are helping improve a legal document search system that uses keyword-based phrase search with slop.
+You are assisting in enhancing a legal judgment search engine. Your task is to transform user-submitted legal queries into effective search phrases, ensuring these phrases closely match the wording commonly found in Supreme Court judgments.
 
-Given a user's legal query, you need to:
-1. Extract important phrases that have legal meaning.
-2. Group those phrases into a 2D array (list of list of strings). Each sublist represents a group of semantically related phrases that can be searched together. All groupings should have atleast one term directly from the search, you can correct spelling mistakes though only if its very evident. Add plurals and different wording within each group.
-3. Additionally, highlight the most critical phrases (from the user query or closely related) in a separate list. Legal terms associated including acts and sections.
+**Task Instructions:**
 
-Return a **JSON-like Python dictionary** with:
-- "search": a list of lists of phrases (each phrase is a string).
-- "highlight": a list of key phrases to visually highlight to the user.
+1. **Extract Key Legal Phrases:**
+   Identify significant legal phrases from the user's query. Rephrase them explicitly as they might appear in Supreme Court judgments. Expand abbreviations and correct obvious spelling mistakes only if necessary.
 
-All entries must be strings. Avoid empty lists.
+2. **Utilize Explanatory Information (after ';'):**
+   If the user's query contains explanatory text after a ";", leverage this information to clarify and rephrase phrases, particularly sections or acts, into wording typically used within judgments.
 
-Example input query: "denial of sanction after taking cognizance"
+3. **Semantic Grouping:**
+   Organize these phrases into semantically related groups. Each group (sublist) should include at least one phrase directly from the user's original query. Within each group, provide plural forms and closely related alternative phrasings.
+
+4. **Highlight Critical Phrases:**
+   Separately list key legal terms and phrases (especially acts, sections, or clearly emphasized legal points) for visual emphasis. Prioritize phrases directly referenced or closely related to the user's query.
+
+**Output Requirements:**
+Return only a valid Python dictionary formatted exactly as follows:
+
+```python
+{
+  "search": [["phrase1", "alternative phrase1"], ["phrase2", "alternative phrase2"], ...],
+  "highlight": ["key phrase1", "key phrase2", ...]
+}
+```
+
+**Ensure:**
+
+* All elements are strings.
+* No empty lists.
+* Exactly two keys: `"search"` and `"highlight"`.
+* No extra comments, explanations, or syntax errors.
+
+**Examples:**
+
+Example Input query: "denial of sanction after taking cognizance"
 
 Example output:
 {
   "search": [
     ["denial of sanction", "refusal to grant sanction", "denial of sanctions"],
-    ["taking cognizance", "cognizance of offence", "cognizance without sanction", "bar to taking cognizance"]
+    ["taking cognizance", "cognizance of offence", "bar to taking cognizance"]
   ],
   "highlight": [
     "sanction under Section",
@@ -186,68 +346,71 @@ Example output:
     "requirement of sanction"
   ]
 }
+```
 
-Example input query: "heydons law"
-
-Example output:
-{
-    "search": [
-        ["Heydon's Law", "Heydon's Rule", "mischief rule"]
-    ],
-    "highlight": [
-        "purposive interpretation",
-        "statutory interpretation"
-    ]
-}
-
-Example input query: "murder"
+Example Input query: "65 of IT Act ; Tampering with computer source documents"
 
 Example output:
 {
-    "search": [
-        ["murder", "murders", "homicide", "homicides", "manslaughter", "manslaughters","killed"]
-    ],
-    "highlight": [
-        "first degree murder",
-        "second degree murder",
-        "voluntary manslaughter",
-        "involuntary manslaughter"
-    ]
+  "search": [
+    ["Section 65 of IT Act", "Section 65 Information Technology Act", "tampering with computer source documents", "computer source code tampering"],
+    ["IT Act", "Information Technology Act"]
+  ],
+  "highlight": [
+    "Section 65 IT Act",
+    "tampering with computer source documents",
+    "computer source code"
+  ]
 }
-
-Example input query: "defence witness to be treated on par with prosecution witness"
+```
+Example Input query: "section 18 of registration act ; documents of which registration is optional."
 
 Example output:
 {
-    "search": [
-        ["defence witness treated on par prosecution witness", "defence witness equitable treatment prosecution witness", "defence witness equal treatment prosecution witness"],
-    ],
-    "highlight": [
-        "witness credibility",
-        "witness impartiality",
-        "rights of defense witness",
-        "rights of prosecution witness"
-    ]
+  "search": [
+    ["section 18 of registration act", "documents of which registration is optional","optionally registrable"],
+    ["registration Act"]
+  ],
+  "highlight": [
+    "Section 17 Registration Act",
+    "optional registration",
+    "optionally registrable"
+  ]
 }
+```
 
-Only return the Python dictionary in this format. Do not add explanations or extra text.
+example Input query: "heydons law"
+
+Example output:
+{
+  "search": [
+    ["Heydon's case", "Heydon's Rule", "mischief rule"]
+  ],
+  "highlight": [
+    "purposive interpretation",
+    "statutory interpretation"
+  ]
+}
+```
+
+Example input query: "victim was decapitated"
+Example output:
+{
+  "search": [
+    ["victim was decapitated", "victim decapitation", "head cut off", "neck was severed"]
+  ],
+  "highlight": [
+    "homicide by decapitation",
+    "murder by decapitation",
+    "aggravated murder",
+    "felony murder"
+  ]
+}
+```
+
+Follow this format strictly and ensure phrases match judicial language for maximum accuracy.
+
 """
-
-        """Example input query: "section 17 from registration act"
-
-Example output:
-{
-    "search": [
-        ["Section 71",  "S. 71"],
-        ["Registration Act"]
-    ],
-    "highlight": [
-        "rectification of errors under Section 71",
-        "powers under Section 71",
-        "Registration Act Section 71"
-    ]
-}
-        """
 
         fix_prompt = """
 Please fix the format of the output to be a valid Python dictionary with this structure:
@@ -268,7 +431,9 @@ Return only the fixed dictionary.
 
         l = getLogger()
         for attempt in range(self.max_retries):
-            response_text = self._query_chatgpt(system_prompt, f"provide result for: '{user_query}'")
+            user_prompt = f"provide result for: '{user_query}'"
+            l.info("user prompt:", user_prompt)
+            response_text = self._query_chatgpt(system_prompt, user_prompt)
             parsed_search_highlight = self._try_parse_search_highlight_json(response_text)
             if parsed_search_highlight is not None:
                 return parsed_search_highlight

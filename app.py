@@ -1,4 +1,4 @@
-
+from getSection import data, find_section_title
 import base64
 from functools import wraps
 import json
@@ -32,6 +32,7 @@ app = Flask(__name__)
 CLOUD_ID = os.environ.get('ELASTIC_CLOUD_ID')
 USERNAME = os.environ.get('ELASTIC_USERNAME')
 PASSWORD = os.environ.get('ELASTIC_PASSWORD')
+ELA_API_KEY = os.environ.get('ELASTIC_API_KEY')
 JUDGMENT_PAGE_URL = "https://thejudgements.in/searchResult?url="
 
 def check_auth(username, password):
@@ -57,6 +58,7 @@ def requires_auth(f):
     return decorated
 
 def get_es():
+    # return Elasticsearch("https://elastic-search.es.ap-south-1.aws.elastic-cloud.com", api_key = ELA_API_KEY)
     if 'es' not in g:
         g.es = Elasticsearch(
             cloud_id=CLOUD_ID,
@@ -70,6 +72,7 @@ def get_es():
 STOPWORDS = set(stopwords.words('english'))
 
 def remove_stopwords(text):
+    # return text
     return ' '.join(word for word in text.split() if word.lower() not in STOPWORDS)
 
 class Term:
@@ -151,7 +154,7 @@ def build_query(queries: list[list[list[Term]]], highlights: list[Term], plain_q
                 "match_phrase": {
                     "document_text": {
                     "query": phrase.text,
-                    "slop": 20,
+                    "slop": 5,
                     "boost": 10
                     }
                 }
@@ -160,7 +163,7 @@ def build_query(queries: list[list[list[Term]]], highlights: list[Term], plain_q
                 "match_phrase": {
                     "document_text": {
                     "query": phrase.no_stop,
-                    "slop": 20,
+                    "slop": 5,
                     "boost": 5
                     }
                 }
@@ -176,7 +179,7 @@ def build_query(queries: list[list[list[Term]]], highlights: list[Term], plain_q
                     "match_phrase": {
                         "document_text": {
                             "query": highlight.no_stop,
-                            "slop": 20,
+                            "slop": 5,
                             "boost": 1
                             }
                         }
@@ -194,7 +197,7 @@ def build_query(queries: list[list[list[Term]]], highlights: list[Term], plain_q
                             "match_phrase": {
                             "document_text": {
                                 "query": phrase.no_stop,
-                                "slop": 20
+                                "slop": 5
                             }
                             }
                         } for phrase in phrases
@@ -293,6 +296,7 @@ def search():
     results = []
     es = get_es()
     llm = get_llm()
+    sections = {}
     corrected_query = ""
     previous_queries_encoded = request.values.get("previous_queries_encoded", encode_queries([]))
     query_text = request.values.get("new_query_text", "")
@@ -302,14 +306,19 @@ def search():
         previous_queries_encoded = request.form.get("previous_queries_encoded", encode_queries([]))
     if query_text:
         queries = decode_queries(previous_queries_encoded)
-        res = llm.fetch_search_highlight(query_text)
+        sections = find_section_title(data=data, query=query_text)
+        print(sections)
+        if isinstance(sections, list):
+            res = llm.fetch_search_highlight(query_text, sections[0])
+        else:
+            res = llm.fetch_search_highlight(query_text,None)
         if res is None:
             res = SearchHighlightResponse([[query_text]], [query_text])
         res_with_no_stop = SearchHighlightResponseWithNoStop.from_search_highlight_response(res)
         queries.append((query_text, res_with_no_stop))
         getLogger().info(f"search keywords: {[q for q, _ in queries]}")
         es_query = build_query([query.search for _, query in queries], res_with_no_stop.highlight, query_text)
-        response = es.search(index="doc_zeta", body=es_query)
+        response = es.search(index="doc_zeta_sci_timely_0_dup_0", body=es_query)
         corrected_query = get_corrected_query(response, query_text)
         for hit in response["hits"]["hits"]:
             highlights_res = hit.get("highlight", {})
@@ -324,7 +333,7 @@ def search():
             })
         previous_queries_encoded = encode_queries(queries)
         display_query_text = ", ".join([text for text, _ in queries])
-    return render_template_string(TEMPLATE, results=results, new_query_text="", corrected_query=corrected_query, previous_queries_encoded=previous_queries_encoded, display_query_text=display_query_text)
+    return render_template_string(TEMPLATE, results=results, new_query_text="", corrected_query=corrected_query, previous_queries_encoded=previous_queries_encoded, display_query_text=display_query_text, sections=sections)
 
 TEMPLATE = """
 <!doctype html>
@@ -349,6 +358,9 @@ TEMPLATE = """
     {% if display_query_text %}
     <p>
     Current Searches: {{display_query_text}}
+    <p>
+    <p>
+    Act and Section Found: {{sections}}
     <p>
     {% endif %}
     {% if not display_query_text %}    <p> <p>
